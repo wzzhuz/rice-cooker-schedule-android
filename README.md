@@ -10,14 +10,16 @@
 
 ---
 
-## 与另一个仓库的关系
+## 设计归档在哪
 
-| 仓库 | 内容 |
+**全部设计资料已完整归档在本仓库的 `design-reference/`，自包含、不依赖外部仓库。**
+
+| 位置 | 内容 |
 |---|---|
-| [wzzhuz/rice-cooker-schedule](https://github.com/wzzhuz/rice-cooker-schedule) | **设计归档**：需求与界面设计文档、OpenSpec 规格、网页版高保真原型、界面预览图 |
-| **本仓库** | **安卓实现**：可编译、可安装的原生 App；网页原型与预览图放在 `design-reference/` 作视觉与行为参考 |
+| **`design-reference/`（本仓库）** | **完整镜像**：需求与界面设计文档、OpenSpec 规格（`project.md` / `AGENTS.md` / `specs` / `changes`）、网页版高保真原型、两张界面预览图、原仓库归档说明与 CI 参考 |
+| [wzzhuz/rice-cooker-schedule](https://github.com/wzzhuz/rice-cooker-schedule) | 原设计仓库，**后续可能删除**；删除不影响本仓库的任何资料 |
 
-网页原型是设计验证工具，不是交付形态。安卓工程以 `app/src/main` 下的 Kotlin 代码为准，`design-reference/` 只读。
+网页原型是设计验证工具，不是交付形态。安卓工程以 `app/src/main` 下的 Kotlin 代码为准，`design-reference/` 只读、Gradle 不引用。规格与实现的对应关系见 `design-reference/README.md`。
 
 ---
 
@@ -102,7 +104,7 @@ app/src/main/java/com/wzzhuz/ricecooker/schedule/
     └── ScheduleScreen.kt   # 全部界面：列表、左滑删除、TimePicker、步进面板
 
 app/src/test/.../ScheduleCalculatorTest.kt   # 18 个 JVM 单元测试
-design-reference/                            # 网页原型 + 设计文档 + 预览图（只读参考）
+design-reference/                            # 设计归档完整镜像：docs / openspec / prototype / previews（只读）
 .github/workflows/android.yml                # CI：单测 + 构建 APK + 上传 artifact
 ```
 
@@ -126,7 +128,7 @@ push / PR / 手动触发，依次执行：
 | 项 | 网页原型 | 安卓实现 | 原因 |
 |---|---|---|---|
 | 添加时间 | 底部展开面板 | 原生 `TimePicker` 对话框 | 安卓平台习惯，且步进面板互斥更自然 |
-| 左滑删除 | DOM touch 事件 | `pointerInput` + `animateDpAsState` | 同样做到「按钮滑入、行内容不位移」 |
+| 左滑删除 | DOM touch 事件 | `pointerInput` + `animateFloatAsState` | 同样做到「按钮滑入、行内容不位移」 |
 | 虚线按钮 | CSS `dashed` | `Modifier.dashedBorder`（Canvas 自绘） | Compose 原生 border 不支持虚线 |
 | 数据 | `localStorage` 键 `rice_cooker_v5` | `SharedPreferences` 键 `rice_cooker_android_v1` | 平台原生存储；不做跨端迁移 |
 | 模拟时间 | URL 参数 `?sim=` | 单元测试直接注入 `LocalDateTime` | 原生没有 URL，测试在 domain 层做更可靠 |
@@ -146,4 +148,4 @@ push / PR / 手动触发，依次执行：
 
 两个已知代价：**不校验 `T < C`**（剩 5 分钟却要煮 30 分钟的饭），以及**按完若停留页面数字仍会变**。都只在边缘场景出现，日常睡前设置不受影响。
 
-完整推导、线框、验收用例与 OpenSpec 规格见 [设计归档仓库](https://github.com/wzzhuz/rice-cooker-schedule)，本仓库的 `design-reference/` 也留了一份快照。
+完整推导、线框、验收用例与 OpenSpec 规格全部收在 **`design-reference/`**（`docs/`、`openspec/`、`prototype/`、`previews/`），自包含、不依赖任何外部仓库；清单与查阅方式见 `design-reference/README.md`。原设计仓库即使删除，本仓库资料依然完整。

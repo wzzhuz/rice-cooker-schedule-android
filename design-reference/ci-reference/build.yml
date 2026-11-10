@@ -1,0 +1,53 @@
+name: 自动编译与验收
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 只做校验、验收与打包，不依赖 Pages 管理权限，任何仓库配置下都能完整通过。
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 准备 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 准备 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 Playwright 与 Chromium
+        run: |
+          python -m pip install --quiet playwright
+          playwright install --with-deps chromium
+
+      - name: 校验 · 构建 · 生成预览
+        run: python .github/scripts/build.py
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: rice-cooker-build
+          path: |
+            dist/
+            电饭煲预约助手_项目归档.zip
+          retention-days: 30
+
+# 可选扩展：若已在仓库 Settings → Pages 启用「GitHub Actions」构建，
+# 可再加 configure-pages / upload-pages-artifact / deploy-pages 三个步骤发布 dist/。
+# 当前归档不依赖它，因此不引入额外权限要求。
