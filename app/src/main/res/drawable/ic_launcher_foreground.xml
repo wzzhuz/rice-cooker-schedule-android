@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 锅体 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,47 L76,47 A4,4 0 0,1 80,51 L78,75 A6,6 0 0,1 72,81 L36,81 A6,6 0 0,1 30,75 L28,51 A4,4 0 0,1 32,47 Z" />
+    <!-- 锅盖 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M29,42 L79,42 A3,3 0 0,1 79,48 L29,48 A3,3 0 0,1 29,42 Z" />
+    <!-- 盖钮 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,34 L58,34 A2,2 0 0,1 58,38 L50,38 A2,2 0 0,1 50,34 Z" />
+    <!-- 锅身显示区 -->
+    <path
+        android:fillColor="#C4703A"
+        android:pathData="M38,56 L70,56 L69,72 L39,72 Z" />
+    <!-- 时钟刻度：12 点短针 + 4 点长针，呼应「预约」 -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M54,64 L54,59 M54,64 L59,67" />
+</vector>

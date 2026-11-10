@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="window_background">#FAF7F2</color>
+    <color name="ic_launcher_background">#C4703A</color>
+
+    <!-- 仅用于启动瞬间的窗口背景；界面深浅色完全由 Compose 按当前小时控制 -->
+    <style name="Theme.RiceCooker" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>电饭煲预约助手</title>
+<style>
+:root{
+  --bg:#FAF7F2; --ink:#2A2520; --sub:#9A9088; --line:#EDE6DC;
+  --brand:#C4703A; --danger:#C4553B;
+}
+body.dark{
+  --bg:#171512; --ink:#F2EBE1; --sub:#8A8075; --line:#302B25;
+  --brand:#E29562; --danger:#E0705A;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;transition:background .25s,color .25s}
+.app{max-width:460px;margin:0 auto;padding:26px 20px 40px;min-height:100vh}
+
+.top{display:flex;align-items:baseline;gap:12px;padding:0 2px 34px}
+.clock{font-size:25px;font-weight:650;letter-spacing:1px;font-variant-numeric:tabular-nums}
+.date{font-size:12px;color:var(--sub)}
+
+.head{display:flex;justify-content:space-between;padding:0 2px 12px;
+  font-size:11.5px;color:var(--sub);letter-spacing:.5px}
+
+.rowwrap{position:relative;overflow:hidden;border-top:1px solid var(--line)}
+.rowwrap:last-of-type{border-bottom:1px solid var(--line)}
+.row{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;
+  gap:12px;min-height:82px;padding:14px 2px;background:var(--bg)}
+.val{font-size:27px;font-weight:700;letter-spacing:-.5px;color:var(--brand);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.dst{text-align:right;white-space:nowrap;transition:opacity .18s ease}
+.dst .t{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.dst .d{font-size:11px;color:var(--sub);margin-left:6px}
+.dst .a{display:block;font-size:10.5px;color:var(--sub);margin-top:4px;
+  font-variant-numeric:tabular-nums}
+
+.del{position:absolute;right:0;top:0;bottom:0;width:78px;z-index:3;
+  display:flex;align-items:center;justify-content:center;border:0;
+  background:var(--danger);color:#fff;font-size:13px;cursor:pointer;
+  transform:translateX(100%);transition:transform .18s ease}
+.rowwrap.open .del,.rowwrap:hover .del{transform:translateX(0)}
+.rowwrap.open .dst,.rowwrap:hover .dst{opacity:0}
+
+.empty{text-align:center;color:var(--sub);font-size:13px;
+  padding:40px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+
+.addbtn{display:block;width:100%;margin-top:24px;padding:15px;border:1px dashed var(--line);
+  border-radius:14px;background:transparent;color:var(--sub);font-size:13.5px;cursor:pointer}
+.addbtn:active{background:var(--line)}
+.panel{margin-top:12px;padding:16px;border:1px solid var(--line);border-radius:14px;
+  text-align:center;display:none}
+.panel.show{display:block}
+.panel input{border:1px solid var(--line);background:var(--bg);color:var(--ink);
+  border-radius:10px;padding:10px 12px;font-size:20px;font-variant-numeric:tabular-nums}
+.panel p{margin:10px 0 0;font-size:11px;color:var(--sub);line-height:1.7}
+.panel .cap{font-size:11px;color:var(--sub);margin:0 0 12px}
+.stepopts{display:flex;gap:8px;justify-content:center}
+.stepopts button{flex:1;max-width:88px;padding:9px 0;border:1px solid var(--line);
+  border-radius:10px;background:var(--bg);color:var(--ink);font-size:13px;cursor:pointer;
+  font-variant-numeric:tabular-nums}
+.stepopts button.on{border-color:var(--brand);color:var(--brand);font-weight:650}
+.custom{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:12px}
+.custom span{font-size:12px;color:var(--sub)}
+.custom input{width:84px;padding:9px 8px;font-size:13px;text-align:center}
+.custom button{padding:9px 14px;border:1px solid var(--line);border-radius:10px;
+  background:var(--bg);color:var(--ink);font-size:12.5px;cursor:pointer}
+.custom.on input{border-color:var(--brand);color:var(--brand)}
+.err{font-size:11px;color:var(--danger);margin:8px 0 0}
+.err:empty{display:none}
+
+.foot{margin-top:28px;text-align:center;font-size:11px;color:var(--sub);line-height:2}
+.link{background:none;border:0;padding:0;color:var(--sub);font-size:inherit;
+  text-decoration:underline dotted;text-underline-offset:3px;cursor:pointer}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top"><span class="clock" id="clk">--:--</span><span class="date" id="dat">—</span></div>
+
+  <div class="head"><span>现在设为</span><span>煮好时间</span></div>
+  <div id="list"></div>
+
+  <button class="addbtn" id="addBtn">+ 添加时间</button>
+  <div class="panel" id="addPanel">
+    <input type="time" id="newTime" value="08:00">
+    <p>选好即自动加入，不用保存</p>
+  </div>
+
+  <div class="foot">
+    预约 = 几小时后煮好，机器自己算开火时间<br>
+    改动自动保存 · 左滑删除 · <button class="link" id="stepBtn">步进 10 分钟 ›</button>
+  </div>
+  <div class="panel" id="stepPanel">
+    <div class="cap" id="stepCap">预约步进 · 一次设定，长期生效</div>
+    <div class="stepopts" id="stepOpts"></div>
+    <div class="custom" id="customRow">
+      <span>自定义</span>
+      <input type="number" id="customStep" min="10" max="240" step="1" inputmode="numeric" placeholder="10–240">
+      <button id="customApply">使用</button>
+    </div>
+    <div class="err" id="stepErr"></div>
+    <p id="stepNote"></p>
+  </div>
+</div>
+
+<script>
+/* 客服确认：预约 = 几小时后煮好，机器自行倒推；默认步进 10 分钟；上限 24 小时；仅倒计时。
+   每行取「该时刻下一次出现」，按步进向下取整（宁可提前保温、绝不迟到）；
+   maxSet 收敛到 24 小时内可按的最大值，因此自定义步进不整除 1440 也不会超上限。*/
+const KEY='rice_cooker_v5', OLD_KEYS=['rice_cooker_v4','rice_cooker_v3'];
+const DEFAULT_TARGETS=['07:30','08:00','09:30'];
+const STEPS=[10,15,30,60], DEFAULT_STEP=10, MIN_STEP=10, MAX_STEP=240;
+const $ =id=>document.getElementById(id);
+const pad=n=>String(n).padStart(2,'0');
+const valid=x=>/^\d{2}:\d{2}$/.test(x);
+
+/* URL 参数仅用于验收边界态，界面上无任何演示控件 */
+const sim=new URLSearchParams(location.search).get('sim');
+let simStart=null, realStart=null;
+if(sim){const t=new Date(sim).getTime();if(!isNaN(t)){
+  simStart=Math.floor(t/60000)*60000; realStart=Date.now();
+}}
+const now=()=>simStart===null?new Date():new Date(simStart+(Date.now()-realStart));
+
+let targets=null, step=null;
+try{
+  const raw=JSON.parse(localStorage.getItem(KEY));
+  if(raw&&Array.isArray(raw.targets)){
+    targets=raw.targets.filter(valid);
+    const s=raw.stepMinutes;
+    step=(Number.isInteger(s)&&s>=MIN_STEP&&s<=MAX_STEP)?s:DEFAULT_STEP;
+  }
+}catch(e){}
+if(!targets){
+  for(const k of OLD_KEYS){
+    try{
+      const old=JSON.parse(localStorage.getItem(k));
+      const arr=Array.isArray(old)?old:(old&&Array.isArray(old.targets)?old.targets:null);
+      if(arr){
+        targets=arr.filter(valid);
+        if(old&&!Array.isArray(old)&&Number.isInteger(old.stepMinutes)&&
+           old.stepMinutes>=MIN_STEP&&old.stepMinutes<=MAX_STEP) step=old.stepMinutes;
+        break;
+      }
+    }catch(e){}
+  }
+}
+if(!targets)targets=DEFAULT_TARGETS.slice();
+if(!step)step=DEFAULT_STEP;
+const save=()=>localStorage.setItem(KEY,JSON.stringify({targets,stepMinutes:step}));
+
+const hm=d=>pad(d.getHours())+':'+pad(d.getMinutes());
+const wk=d=>'周'+'日一二三四五六'[d.getDay()];
+function dur(m){const h=Math.floor(m/60),r=m%60;
+  return h?(r?`${h} 小时 ${r} 分`:`${h} 小时`):`${r} 分钟`;}
+function nextAt(N,hmStr,s){
+  const [h,m]=hmStr.split(':').map(Number);
+  let d=new Date(N.getFullYear(),N.getMonth(),N.getDate(),h,m,0,0);
+  // 已到 / 已过 / 剩余不足一个步进 → 顺延到明天
+  if(d.getTime()-N.getTime()<s*60000) d.setDate(d.getDate()+1);
+  return d;
+}
+function dayTag(d,N){
+  const a=new Date(N.getFullYear(),N.getMonth(),N.getDate());
+  const b=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+  return Math.round((b-a)/86400000)===0?'今天':'明天';
+}
+
+let lastMin='';
+function renderRows(){
+  const N=now();
+  const Nm=new Date(Math.floor(N.getTime()/60000)*60000); // 分钟级：整分钟内稳定
+  const maxSet=Math.floor(1440/step)*step;                // 24 小时内可按的最大值
+  targets.sort();
+  if(!targets.length){
+    $('list').innerHTML='<div class="empty">还没有时间，点下方添加</div>';
+    return;
+  }
+  $('list').innerHTML=targets.map(t=>{
+    const D=nextAt(Nm,t,step);
+    const diff=Math.round((D-Nm)/60000);
+    const T=Math.min(Math.floor(diff/step)*step,maxSet);  // 向下取整 + 24h 兜底
+    const done=new Date(Nm.getTime()+T*60000);
+    return `<div class="rowwrap" data-t="${t}">
+      <button class="del" data-del="${t}">删除</button>
+      <div class="row"><span class="val">${dur(T)}</span>
+        <span class="dst"><span class="t">${t}</span><span class="d">${dayTag(D,Nm)}</span>
+          <span class="a">实际 ${hm(done)} 完成</span></span>
+      </div></div>`;
+  }).join('');
+}
+let lastStep=null;
+function renderStep(){
+  if(step===lastStep)return;   // 面板展开时不每秒重建，避免打断输入
+  lastStep=step;
+  const custom=!STEPS.includes(step);
+  $('stepBtn').textContent=`步进 ${step} 分钟 ›`;
+  $('stepCap').textContent=custom
+    ?`预约步进 · 当前 ${step} 分（自定义）`
+    :'预约步进 · 一次设定，长期生效';
+  $('stepOpts').innerHTML=STEPS.map(s=>
+    `<button data-s="${s}" class="${s===step?'on':''}">${s} 分</button>`).join('');
+  $('customRow').classList.toggle('on',custom);
+  $('customStep').value=custom?step:'';
+  $('stepErr').textContent='';
+  const divides=1440%step===0;
+  $('stepNote').textContent=divides
+    ?`按 ${step} 分钟步进向下取整，最多早 ${step-1} 分钟煮好并自动保温，绝不迟到。`
+    :`按 ${step} 分钟步进向下取整，只会提前煮好并自动保温，绝不迟到；提前多久看每行小字。`;
+}
+function render(){
+  const N=now();
+  $('clk').textContent=hm(N);
+  $('dat').textContent=`${N.getMonth()+1}月${N.getDate()}日 ${wk(N)}`;
+  const h=N.getHours();
+  document.body.classList.toggle('dark',h>=20||h<7);
+  renderStep();
+  const key=`${N.getFullYear()}-${N.getMonth()}-${N.getDate()}-${N.getHours()}-${N.getMinutes()}`;
+  if(key!==lastMin){lastMin=key;renderRows();}
+}
+
+/* ---- 左滑删除：判断方向，删除按钮滑入，行内容不位移 ---- */
+let sx=0,sy=0,cur=null,dx=0;
+$('list').addEventListener('touchstart',e=>{
+  const w=e.target.closest('.rowwrap');if(!w)return;
+  sx=e.touches[0].clientX;sy=e.touches[0].clientY;cur=w;dx=0;
+},{passive:true});
+$('list').addEventListener('touchmove',e=>{
+  if(!cur)return;
+  dx=e.touches[0].clientX-sx;
+  const dy=e.touches[0].clientY-sy;
+  if(Math.abs(dx)>Math.abs(dy))e.preventDefault();
+},{passive:false});
+$('list').addEventListener('touchend',()=>{
+  if(!cur)return;
+  if(dx<-30)cur.classList.add('open');
+  else if(dx>30)cur.classList.remove('open');
+  cur=null;
+},{passive:true});
+$('list').addEventListener('click',e=>{
+  const del=e.target.dataset.del;
+  if(del){targets=targets.filter(t=>t!==del);save();renderRows();return;}
+  document.querySelectorAll('.rowwrap.open').forEach(w=>w.classList.remove('open'));
+});
+
+/* ---- 添加：选完即插入、自动排序、自动保存 ---- */
+$('addBtn').onclick=()=>{
+  const p=$('addPanel'),show=!p.classList.contains('show');
+  $('stepPanel').classList.remove('show');
+  p.classList.toggle('show',show);
+  $('addBtn').textContent=show?'收起':'+ 添加时间';
+  if(show)$('newTime').focus();
+};
+$('newTime').onchange=e=>{
+  const v=e.target.value;
+  if(!v)return;
+  if(!targets.includes(v))targets.push(v);
+  targets.sort();save();renderRows();
+  $('addPanel').classList.remove('show');
+  $('addBtn').textContent='+ 添加时间';
+};
+
+/* ---- 步进：预设点一下即存；自定义填完即存、收起、全表重算 ---- */
+$('stepBtn').onclick=()=>{
+  const p=$('stepPanel'),show=!p.classList.contains('show');
+  $('addPanel').classList.remove('show');
+  $('addBtn').textContent='+ 添加时间';
+  p.classList.toggle('show',show);
+};
+$('stepOpts').addEventListener('click',e=>{
+  const s=parseInt(e.target.dataset.s,10);
+  if(!STEPS.includes(s))return;
+  step=s;save();
+  $('stepPanel').classList.remove('show');
+  renderStep();renderRows();
+});
+function applyCustom(){
+  const v=Number($('customStep').value);
+  if(!Number.isInteger(v)||v<MIN_STEP||v>MAX_STEP){
+    $('stepErr').textContent=`请填 ${MIN_STEP}–${MAX_STEP} 之间的整数分钟`;
+    return;
+  }
+  step=v;save();
+  $('stepPanel').classList.remove('show');
+  renderStep();renderRows();
+}
+$('customApply').onclick=applyCustom;
+$('customStep').addEventListener('keydown',e=>{if(e.key==='Enter')applyCustom();});
+
+setInterval(render,1000);
+render();
+</script>
+</body>
+</html>
