@@ -113,7 +113,7 @@ push / PR / 手动触发，依次执行：
 1. 准备 JDK 17 与 Gradle 缓存；
 2. `:app:testDebugUnitTest` —— 覆盖睡前设置、跨天顺延、24 小时边界、自定义 25 分兜底、任意时刻×任意步进「绝不迟到」不变量、日期与深浅色文案等 18 个用例；
 3. `:app:assembleDebug` —— 产出可安装 APK；
-4. 上传 `rice-cooker-debug-apk` 与单元测试报告两个 artifact。
+4. 上传三个 artifact：`rice-cooker-debug-apk`（可安装 APK）、`unit-test-report`（测试报告）、`gradle-build-log`（构建日志）。
 
 工作流只申请 `contents: read`，不依赖 Pages 或其他仓库设置。
 

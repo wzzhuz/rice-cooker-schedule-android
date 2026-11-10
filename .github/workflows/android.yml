@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: android-${{ github.ref }}
@@ -36,7 +35,6 @@ jobs:
         run: chmod +x gradlew
 
       - name: JVM 单元测试（计算核心，覆盖全场景）
-        id: tests
         run: |
           set -o pipefail
           ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build.log
@@ -71,35 +69,3 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
           retention-days: 14
-
-      - name: 失败时回传日志
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          python3 - <<'PY'
-          import os, json, urllib.request
-          import re
-          log = open('build.log', encoding='utf-8', errors='ignore').read()
-          key = re.compile(r'^e: |error:|FAILURE:|What went wrong|Execution failed|> Task .*FAILED|Unresolved|Compilation error', re.I)
-          picked = [l for l in log.splitlines() if key.search(l)][:120]
-          summary = '\n'.join(picked) if picked else '(未提取到关键行)'
-          if len(log) > 58000:
-              log = log[:58000] + '\n...(日志过长已截断，关键行见上方摘要)'
-          body = ("## CI 失败日志（run %s）\n\n### 关键行\n```text\n%s\n```\n\n"
-                  "### 完整日志\n```text\n%s\n```") % (os.environ['RUN_ID'], summary, log)
-          data = json.dumps({
-              'title': '[CI 日志] 自动编译失败 run ' + os.environ['RUN_ID'],
-              'body': body,
-          }).encode()
-          req = urllib.request.Request(
-              'https://api.github.com/repos/' + os.environ['GH_REPO'] + '/issues',
-              data=data, method='POST',
-              headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                       'Accept': 'application/vnd.github+json',
-                       'Content-Type': 'application/json',
-                       'User-Agent': 'ci-log-reporter'})
-          print('issue ->', urllib.request.urlopen(req, timeout=20).status)
-          PY
