@@ -1,5 +1,7 @@
 # 电饭煲预约助手 · Android 应用
 
+[![Android 构建与测试](https://github.com/wzzhuz/rice-cooker-schedule-android/actions/workflows/android.yml/badge.svg)](https://github.com/wzzhuz/rice-cooker-schedule-android/actions/workflows/android.yml)
+
 **版本**：v0.5.0（对应设计定稿 v0.5）
 **仓库**：`wzzhuz/rice-cooker-schedule-android`（公开）
 **形态**：Kotlin + Jetpack Compose 原生安卓应用，手机本地运行，**完全离线**
