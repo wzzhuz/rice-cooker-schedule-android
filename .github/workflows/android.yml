@@ -37,10 +37,14 @@ jobs:
 
       - name: JVM 单元测试（计算核心，覆盖全场景）
         id: tests
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build.log
+        run: |
+          set -o pipefail
+          ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build.log
 
       - name: 构建可安装 Debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee -a build.log
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee -a build.log
 
       - name: 上传 APK
         uses: actions/upload-artifact@v4
@@ -77,8 +81,15 @@ jobs:
         run: |
           python3 - <<'PY'
           import os, json, urllib.request
-          log = open('build.log', encoding='utf-8', errors='ignore').read()[-14000:]
-          body = "## CI 失败日志（run %s）\n\n```text\n%s\n```" % (os.environ['RUN_ID'], log)
+          import re
+          log = open('build.log', encoding='utf-8', errors='ignore').read()
+          key = re.compile(r'^e: |error:|FAILURE:|What went wrong|Execution failed|> Task .*FAILED|Unresolved|Compilation error', re.I)
+          picked = [l for l in log.splitlines() if key.search(l)][:120]
+          summary = '\n'.join(picked) if picked else '(未提取到关键行)'
+          if len(log) > 58000:
+              log = log[:58000] + '\n...(日志过长已截断，关键行见上方摘要)'
+          body = ("## CI 失败日志（run %s）\n\n### 关键行\n```text\n%s\n```\n\n"
+                  "### 完整日志\n```text\n%s\n```") % (os.environ['RUN_ID'], summary, log)
           data = json.dumps({
               'title': '[CI 日志] 自动编译失败 run ' + os.environ['RUN_ID'],
               'body': body,
