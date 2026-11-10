@@ -2,7 +2,6 @@
 
 package com.wzzhuz.ricecooker.schedule.ui
 
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -209,11 +208,12 @@ private fun ScheduleRow(
 ) {
     var open by remember { mutableStateOf(false) }
     var dragX by remember { mutableStateOf(0f) }
-    val reveal by animateDpAsState(
-        targetValue = if (open) 78.dp else 0.dp,
+    val revealFraction by animateFloatAsState(
+        targetValue = if (open) 1f else 0f,
         animationSpec = tween(180),
         label = "reveal",
     )
+    val reveal = 78.dp * revealFraction
     val dstAlpha by animateFloatAsState(
         targetValue = if (open) 0f else 1f,
         animationSpec = tween(180),

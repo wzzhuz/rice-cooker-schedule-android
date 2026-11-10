@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: android-${{ github.ref }}
@@ -35,10 +36,11 @@ jobs:
         run: chmod +x gradlew
 
       - name: JVM 单元测试（计算核心，覆盖全场景）
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+        id: tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build.log
 
       - name: 构建可安装 Debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee -a build.log
 
       - name: 上传 APK
         uses: actions/upload-artifact@v4
@@ -48,6 +50,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -56,3 +67,28 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: 失败时回传日志
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import os, json, urllib.request
+          log = open('build.log', encoding='utf-8', errors='ignore').read()[-14000:]
+          body = "## CI 失败日志（run %s）\n\n```text\n%s\n```" % (os.environ['RUN_ID'], log)
+          data = json.dumps({
+              'title': '[CI 日志] 自动编译失败 run ' + os.environ['RUN_ID'],
+              'body': body,
+          }).encode()
+          req = urllib.request.Request(
+              'https://api.github.com/repos/' + os.environ['GH_REPO'] + '/issues',
+              data=data, method='POST',
+              headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                       'Accept': 'application/vnd.github+json',
+                       'Content-Type': 'application/json',
+                       'User-Agent': 'ci-log-reporter'})
+          print('issue ->', urllib.request.urlopen(req, timeout=20).status)
+          PY
