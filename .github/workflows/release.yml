@@ -156,7 +156,38 @@ jobs:
           USING_RELEASE: ${{ steps.signing.outputs.using_release }}
         run: |
           APK="app/build/outputs/apk/release/$APK_NAME"
-          keytool -printcert -jarfile "$APK" | tee /tmp/cert.txt
+
+          # keytool -printcert -jarfile 只能读 JAR v1 签名；AGP 8.x + minSdk 26
+          # 默认只签 v2/v3，此时它会报 "not a signed jar file"，在 run 默认的
+          # bash -e 下直接中断，连证书都读不到。必须用 apksigner。
+          APKSIGNER=""
+          for BASE in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" \
+                      /usr/local/lib/android/sdk /opt/android-sdk /usr/lib/android-sdk; do
+            [ -n "$BASE" ] && [ -d "$BASE/build-tools" ] || continue
+            APKSIGNER=$(find "$BASE/build-tools" -name apksigner -type f 2>/dev/null | sort | tail -1)
+            [ -n "$APKSIGNER" ] && break
+          done
+
+          : > /tmp/cert.txt
+          if [ -n "$APKSIGNER" ]; then
+            echo "签名校验工具：$APKSIGNER"
+            if ! "$APKSIGNER" verify "$APK" >/dev/null 2>&1; then
+              echo "❌ apksigner 验证未通过：APK 签名无效或根本没签上"
+              exit 1
+            fi
+            "$APKSIGNER" verify --print-certs "$APK" 2>&1 | tee /tmp/cert.txt
+          else
+            echo "::warning::未找到 apksigner，回退 keytool（v2-only APK 可能读不到证书）"
+            keytool -printcert -jarfile "$APK" 2>&1 | tee /tmp/cert.txt || true
+          fi
+
+          { echo "### 签名证书"; echo '```'; cat /tmp/cert.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          if ! grep -q "CN=" /tmp/cert.txt; then
+            echo "❌ 未能从 APK 读出签名证书，无法确认签名来源"
+            exit 1
+          fi
           if [ "$USING_RELEASE" = "true" ]; then
             if grep -q "CN=RiceCooker Debug" /tmp/cert.txt; then
               echo "❌ 声明使用正式密钥，但 APK 仍是 debug 签名（Secret 配漏或 base64 解码失败）"

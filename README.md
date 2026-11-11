@@ -175,7 +175,8 @@ design-reference/                            # 设计归档完整镜像：docs /
 | 不用 `curl --fail`、脚本不 `set -e` | `--fail` 会在 HTTP 错误时直接退出，状态码和响应体都拿不到，日志只剩一句无信息量的报错 |
 | 上传带 `--retry 2 --retry-delay 15 --max-time 900` | GitHub runner 在美国，跨境链路抖动常见；`HTTP 000` 是网络层失败，不是配置错 |
 | 文件名纯 ASCII | GitHub Release 资产接口会**静默丢弃**中文且不报错，而 Actions artifact 名支持 Unicode，两边显示会不一致 |
-| 签名校验看 APK 证书 Owner | 不信脚本自己打印的「✅ 使用正式密钥」——Secret 配漏时同样会打印。这里做双向校验：声明用正式密钥就不能是 debug 证书，声明回退就必须确实是那把固定密钥 |
+| 签名校验用 `apksigner`，不用 `keytool -jarfile` | `keytool -printcert -jarfile` 只能读 JAR v1 签名，AGP 8.x + minSdk 26 默认只签 v2/v3，会报「not a signed jar file」并在 `bash -e` 下直接中断。首次实跑就踩到了，已改用 Android SDK 自带的 `apksigner verify --print-certs`，并把证书输出写进 Job Summary |
+| 双向校验签名来源 | 不信脚本自己打印的「✅ 使用正式密钥」——Secret 配漏时同样会打印。声明用正式密钥就不能是 debug 证书，声明回退就必须确实是那把固定密钥 |
 | `versionCode` 由版本名推导 | 此前恒为 1，连发两版系统判不出新旧、无法覆盖升级 |
 | `create_release` 与上传解绑 | lifelog 原版把上传绑在「创建 GitHub Release」上，不勾打 tag 就不推坚果云；本项目的诉求是「出包 + 推国内网盘」，不该被版本号牵着走 |
 
