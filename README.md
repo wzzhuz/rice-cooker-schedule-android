@@ -85,7 +85,7 @@ app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-最低支持 **Android 8.0（API 26）**，目标 API 35。debug APK 已带调试签名，可直接安装；发正式版时再在 `app/build.gradle.kts` 配置 release signingConfig。
+最低支持 **Android 8.0（API 26）**，目标 API 35。仓库内 `app/debug.keystore` 是一把**固定的 debug 密钥**，debug 与 release 默认都用它签名，保证各批次 APK 签名一致、可直接覆盖安装；要出可对外分发的正式包，配齐 4 个签名 Secret 即可自动切换（见「发版」）。
 
 **权限**：`AndroidManifest.xml` 里没有 `INTERNET`，不申请任何运行时权限。数据只存本机 `SharedPreferences`（键 `rice_cooker_android_v1`），时间取设备系统时钟，不联网、不校时、不上传。
 
@@ -103,23 +103,81 @@ app/src/main/java/com/wzzhuz/ricecooker/schedule/
     ├── Theme.kt            # 深浅色调色板（20:00–07:00 自动切换）
     └── ScheduleScreen.kt   # 全部界面：列表、左滑删除、TimePicker、步进面板
 
+app/debug.keystore                           # 固定 debug 签名密钥（公开仓库内，仅供自用）
 app/src/test/.../ScheduleCalculatorTest.kt   # 18 个 JVM 单元测试
 design-reference/                            # 设计归档完整镜像：docs / openspec / prototype / previews（只读）
-.github/workflows/android.yml                # CI：单测 + 构建 APK + 上传 artifact
+.github/workflows/android.yml                # 日常 CI：push 触发，单测 + debug APK
+.github/workflows/release.yml                # 发版 CI：手动触发，release APK + 坚果云 WebDAV
+.github/scripts/prepare-signing.sh           # 签名密钥准备（正式 / 固定 debug 自动切换）
 ```
 
 ---
 
 ## 自动编译（GitHub Actions）
 
-push / PR / 手动触发，依次执行：
+**日常 CI** `.github/workflows/android.yml`：push / PR / 手动触发，依次执行：
 
 1. 准备 JDK 17 与 Gradle 缓存；
 2. `:app:testDebugUnitTest` —— 覆盖睡前设置、跨天顺延、24 小时边界、自定义 25 分兜底、任意时刻×任意步进「绝不迟到」不变量、日期与深浅色文案等 18 个用例；
 3. `:app:assembleDebug` —— 产出可安装 APK；
 4. 上传三个 artifact：`rice-cooker-debug-apk`（可安装 APK）、`unit-test-report`（测试报告）、`gradle-build-log`（构建日志）。
 
-工作流只申请 `contents: read`，不依赖 Pages 或其他仓库设置。
+工作流只申请 `contents: read`，不依赖 Pages 或其他仓库设置。**发版 CI 是另一条独立工作流**，见下一节。
+
+---
+
+## 发版：编译 Release 包并推送坚果云
+
+`.github/workflows/release.yml`，**只手动触发**：仓库 → Actions → 左侧「编译 Release 包并推送坚果云」→ Run workflow。
+
+### 输入项
+
+| 输入 | 默认 | 说明 |
+|---|---|---|
+| `version_name` | 留空 | 留空读 `app/build.gradle.kts` 的 `defaultVersionName`；填了会同时传给 Gradle，APK 内版本号与文件名一致。发版后请同步改文件 |
+| `upload_nutstore` | **true** | 上传到坚果云。反复调试时手动关掉，不必删 Secret |
+| `nutstore_folder` | `rice-cooker-releases` | 坚果云目标文件夹，纯英文/数字 |
+| `create_release` | **false** | 是否额外打 tag 并建 GitHub Release。**与坚果云上传完全解耦**——只想要国内可下载的安装包时，不必占用版本号 |
+| `minify` | false | 是否开 R8 混淆与资源压缩 |
+
+产物固定命名 `rice-cooker-v<版本>.apk`（纯 ASCII），同时上传到 Actions Artifacts 与坚果云 `/rice-cooker-releases/`。
+
+### 需要配置的 Secret
+
+**坚果云（必配，否则上传步骤跳过但构建仍成功）**
+
+| Secret | 值 |
+|---|---|
+| `JGY_USER` | 坚果云账号（一般是注册邮箱） |
+| `JGY_APP_PASSWORD` | **应用密码**，坚果云网页端 → 账户信息 → 安全选项 → 第三方应用管理 → 添加应用密码。**不是登录密码**，自 2023 年起登录密码直连 WebDAV 会返回 401/403 |
+
+**正式签名（可选，4 项必须齐全）**
+
+`RELEASE_KEYSTORE_BASE64`（`base64 -w 0 your.keystore`）、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`（PKCS12 下须与 `KEYSTORE_PASSWORD` 相同）。配齐后 `prepare-signing.sh` 自动切到正式密钥；缺任一项则回退仓库内 `app/debug.keystore`。
+
+> ⚠️ `app/debug.keystore` 提交在**公开仓库**里，密钥是公开的，任何人都能签出同名同签名的包。**仅供自用，请勿对外分发**。若手机上装过早期由 CI 随机 debug 密钥签出的包，换成固定密钥后签名不同，需要先卸载再装（会丢掉本机保存的目标时刻列表，重新加一次即可）。
+
+### 免费版配额
+
+坚果云免费版每月上传 **1GB**、下载 3GB、单文件 500MB，且**总空间 = 累计上传流量，删旧文件也不释放**。所以：
+
+- 只给手动触发的 release 构建加上传，**绝不给每次 push 的 debug 构建加**；
+- 做成布尔开关而不是「Secret 配了就传」，调试期间可临时关掉。
+
+### 上传实现要点
+
+三段式 WebDAV：`PROPFIND` 认证测试（只读、不耗流量）→ `MKCOL` 确保目录存在（201 新建 / 405 已存在）→ `PUT` 上传（201 新建 / 204 覆盖），最后 `HEAD` 校验文件确实落盘。状态码与排查建议直接写进 Job Summary，`trap dump EXIT` 保证失败时诊断日志不丢。
+
+几个刻意的设计，均来自 `my-app-workflow/recipes/上传APK到坚果云.md` 与 `lifelog/.github/workflows/release.yml` 的实测经验：
+
+| 决策 | 理由 |
+|---|---|
+| 不用 `curl --fail`、脚本不 `set -e` | `--fail` 会在 HTTP 错误时直接退出，状态码和响应体都拿不到，日志只剩一句无信息量的报错 |
+| 上传带 `--retry 2 --retry-delay 15 --max-time 900` | GitHub runner 在美国，跨境链路抖动常见；`HTTP 000` 是网络层失败，不是配置错 |
+| 文件名纯 ASCII | GitHub Release 资产接口会**静默丢弃**中文且不报错，而 Actions artifact 名支持 Unicode，两边显示会不一致 |
+| 签名校验看 APK 证书 Owner | 不信脚本自己打印的「✅ 使用正式密钥」——Secret 配漏时同样会打印。这里做双向校验：声明用正式密钥就不能是 debug 证书，声明回退就必须确实是那把固定密钥 |
+| `versionCode` 由版本名推导 | 此前恒为 1，连发两版系统判不出新旧、无法覆盖升级 |
+| `create_release` 与上传解绑 | lifelog 原版把上传绑在「创建 GitHub Release」上，不勾打 tag 就不推坚果云；本项目的诉求是「出包 + 推国内网盘」，不该被版本号牵着走 |
 
 ---
 

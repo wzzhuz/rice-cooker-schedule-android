@@ -1,0 +1,414 @@
+name: 编译 Release 包并推送坚果云
+
+# 与 android.yml 的分工：
+#   android.yml —— 每次 push 自动跑，debug 构建 + 18 项 JVM 单测，日常验证
+#   本文件     —— 手动触发，产出可安装的 release APK 并推送坚果云（WebDAV）
+#
+# 为什么不加到 push 触发：坚果云免费版每月 1GB 上传流量，且
+# 「总空间 = 累计上传流量」，删掉旧文件也不释放。每次 push 都传会迅速烧光额度。
+# 因此只给手动触发的 release 构建加上传，并做成可临时关闭的布尔开关。
+#
+# 触发：仓库 → Actions → 左侧「编译 Release 包并推送坚果云」→ Run workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: '版本号（留空则读取 app/build.gradle.kts 里的 defaultVersionName）'
+        required: false
+        type: string
+        default: ''
+      upload_nutstore:
+        description: '上传到坚果云（免费版每月 1GB 上传流量，反复调试时建议关掉）'
+        required: false
+        type: boolean
+        default: true
+      nutstore_folder:
+        description: '坚果云内的目标文件夹名（只能含英文/数字，留空用 rice-cooker-releases）'
+        required: false
+        type: string
+        default: 'rice-cooker-releases'
+      create_release:
+        description: '同时打 tag 并创建 GitHub Release（与坚果云上传互不依赖）'
+        required: false
+        type: boolean
+        default: false
+      minify:
+        description: '开启 R8 混淆与资源压缩（默认关）'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# 写了 permissions 块就会覆盖全部默认值：只写 contents: write 会让 actions 权限
+# 变成 none，upload-artifact 直接失败，且报错完全看不出是权限问题。
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  release:
+    name: 编译 Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Gradle（带依赖缓存）
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
+
+      - name: 赋予 gradlew 执行权限
+        run: chmod +x gradlew
+
+      # ---------------------------------------------------------------
+      # 签名：四项 Secret 齐全才用正式密钥，否则回退仓库内 app/debug.keystore。
+      # 脚本 stdout 只有 4 行 KEY=value，追加进 GITHUB_ENV 供 Gradle 读取；
+      # using_release 写进 step outputs，供后面的「校验签名信息」判定。
+      # ---------------------------------------------------------------
+      - name: 准备签名密钥
+        id: signing
+        run: bash .github/scripts/prepare-signing.sh >> "$GITHUB_ENV"
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PW:             ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS_V:          ${{ secrets.KEY_ALIAS }}
+          KEY_PW:               ${{ secrets.KEY_PASSWORD }}
+
+      - name: 校验固定 debug 密钥存在
+        if: steps.signing.outputs.using_release != 'true'
+        run: |
+          test -f app/debug.keystore \
+            || { echo "❌ 缺少 app/debug.keystore，release 包会变成 unsigned"; exit 1; }
+          echo "✅ app/debug.keystore 已就绪（签名固定，可覆盖安装）"
+
+      # 版本号必须传给 Gradle，否则只改文件名和标题、APK 内仍是文件里的旧值。
+      # 用 python3 提取而不是 grep -oP：-P 依赖 PCRE 编译选项，换镜像就可能不支持。
+      - name: 确定版本号
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version_name }}
+        run: |
+          V="$INPUT_VERSION"
+          if [ -z "$V" ]; then
+            V=$(python3 -c 'import re;m=re.search(r"val defaultVersionName\s*=\s*\"([^\"]+)\"",open("app/build.gradle.kts",encoding="utf-8").read());print(m.group(1) if m else "0.0.0")')
+          fi
+          V="${V#v}"
+          SAFE_V=$(printf '%s' "$V" | tr -c 'A-Za-z0-9._-' '_')
+          CODE=$(python3 -c 'import sys;p=(sys.argv[1].split(".")+["0","0","0"])[:3];n=[int(x) if x.isdigit() else 0 for x in p];print(n[0]*10000+n[1]*100+n[2])' "$V")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "safe_version=$SAFE_V" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "版本号 $V（versionCode=$CODE）"
+
+      # assembleRelease 只编译主源码，不会碰 src/test。
+      # 单独跑一次 test，否则改坏 build.gradle.kts 的配置也可能一路绿灯。
+      - name: 运行单元测试
+        run: ./gradlew :app:testDebugUnitTest --stacktrace --no-daemon
+
+      - name: 编译 Release APK
+        env:
+          V: ${{ steps.ver.outputs.version }}
+          C: ${{ steps.ver.outputs.code }}
+          MINIFY: ${{ inputs.minify }}
+        run: |
+          set -o pipefail
+          ARGS=(:app:assembleRelease --stacktrace --no-daemon
+                "-PversionNameOverride=$V" "-PversionCodeOverride=$C")
+          if [ "$MINIFY" = "true" ]; then
+            ARGS+=("-PminifyRelease=true")
+          fi
+          ./gradlew "${ARGS[@]}" 2>&1 | tee build.log
+
+      - name: 重命名产物
+        id: rename
+        env:
+          SAFE_V: ${{ steps.ver.outputs.safe_version }}
+        run: |
+          cd app/build/outputs/apk/release
+          # 文件名必须纯 ASCII：GitHub Release 资产接口不支持非 ASCII，中文会被
+          # 静默丢弃且不报错；Actions artifact 名支持 Unicode，两边会显示不一致。
+          APK="rice-cooker-v${SAFE_V}.apk"
+          mv app-release.apk "$APK"
+          ls -lh
+          echo "apk_name=$APK" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "size=$(du -h "$APK" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      # 不信任脚本自己打印的「✅ 使用正式密钥」—— Secret 配漏时同样会打印。
+      # 直接查 APK 里证书的 Owner，双向校验：声明用正式密钥就不能是 debug 证书，
+      # 声明回退就必须确实是那把固定密钥（而不是压根没签上）。
+      - name: 校验签名信息
+        env:
+          APK_NAME: ${{ steps.rename.outputs.apk_name }}
+          USING_RELEASE: ${{ steps.signing.outputs.using_release }}
+        run: |
+          APK="app/build/outputs/apk/release/$APK_NAME"
+          keytool -printcert -jarfile "$APK" | tee /tmp/cert.txt
+          if [ "$USING_RELEASE" = "true" ]; then
+            if grep -q "CN=RiceCooker Debug" /tmp/cert.txt; then
+              echo "❌ 声明使用正式密钥，但 APK 仍是 debug 签名（Secret 配漏或 base64 解码失败）"
+              exit 1
+            fi
+            echo "✅ 已使用正式密钥签名"
+          else
+            if ! grep -q "CN=RiceCooker Debug" /tmp/cert.txt; then
+              echo "❌ 未配正式密钥，APK 也不是固定 debug 签名 —— 可能根本没签上"
+              exit 1
+            fi
+            echo "✅ 使用仓库内固定 debug 密钥签名（自用包，请勿对外分发）"
+          fi
+
+      # 上传失败不中断：后面还有 GitHub Release 与坚果云两条交付路径，
+      # 都不占 Actions 制品配额。
+      - name: 上传 Release APK 制品
+        id: upload_apk
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.rename.outputs.apk_name }}
+          path: app/build/outputs/apk/release/${{ steps.rename.outputs.apk_name }}
+          retention-days: 90
+          if-no-files-found: error
+
+      # ---------------------------------------------------------------
+      # 可选：打 tag 并建 GitHub Release（独立开关，默认关）
+      # 与坚果云上传完全解耦 —— 只想要国内可下载的安装包时，
+      # 没必要占用版本号、也不用在 Releases 页留记录。
+      # ---------------------------------------------------------------
+      - name: 创建 tag 并发布 Release
+        if: inputs.create_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: v${{ steps.ver.outputs.version }}
+          APK_NAME: ${{ steps.rename.outputs.apk_name }}
+          APK_SHA: ${{ steps.rename.outputs.sha256 }}
+          APK_SIZE: ${{ steps.rename.outputs.size }}
+          USING_RELEASE: ${{ steps.signing.outputs.using_release }}
+        run: |
+          APK="app/build/outputs/apk/release/$APK_NAME"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            git push origin --delete "$TAG_NAME" || true
+          fi
+          git tag -f "$TAG_NAME"
+          git push origin "$TAG_NAME"
+
+          {
+            echo "电饭煲预约助手 $TAG_NAME"
+            echo ""
+            echo "自动编译的 Release 版本。"
+            echo ""
+            echo "**安装提示**"
+            echo "- 下载下方 APK 传到手机，允许「未知来源应用」后安装"
+            echo ""
+            echo "**安全提示**"
+            if [ "$USING_RELEASE" = "true" ]; then
+              echo "- 使用专用 release 密钥签名，与旧版本签名一致可直接覆盖升级"
+            else
+              echo "- ⚠️ 本包使用仓库内的固定 debug 密钥签名（未配置正式密钥 Secret）"
+              echo "- 该密钥是公开的，任何人都能签出同名同签名的包，请勿对外分发"
+            fi
+            echo ""
+            echo "**校验信息**"
+            echo "- 文件大小：$APK_SIZE"
+            echo "- SHA256：\`$APK_SHA\`"
+          } > /tmp/notes.md
+
+          gh release create "$TAG_NAME" "$APK" \
+            --title "电饭煲预约助手 $TAG_NAME" \
+            --notes-file /tmp/notes.md \
+            || gh release edit "$TAG_NAME" --notes-file /tmp/notes.md \
+               && gh release upload "$TAG_NAME" "$APK" --clobber
+
+      # ---------------------------------------------------------------
+      # 上传到坚果云（WebDAV）
+      #
+      # 前置配置（本仓库级，不与其他仓库共享）：
+      #   1. 坚果云网页端 → 账户信息 → 安全选项 → 第三方应用管理
+      #      → 添加应用密码（是「应用密码」，不是登录密码）
+      #   2. 本仓库 Settings → Secrets and variables → Actions 添加：
+      #      JGY_USER          —— 坚果云账号（一般是注册邮箱）
+      #      JGY_APP_PASSWORD  —— 上一步生成的应用密码
+      #
+      # 免费版配额：每月上传 1GB / 下载 3GB，单文件上限 500MB。
+      # 空间 = 累计上传流量，删旧文件不释放，所以只给手动触发的 release 用。
+      # ---------------------------------------------------------------
+      - name: 上传到坚果云
+        id: nutstore
+        if: inputs.upload_nutstore
+        env:
+          JGY_USER: ${{ secrets.JGY_USER }}
+          JGY_APP_PASSWORD: ${{ secrets.JGY_APP_PASSWORD }}
+          APK_NAME: ${{ steps.rename.outputs.apk_name }}
+          FOLDER: ${{ inputs.nutstore_folder }}
+        run: |
+          # 刻意不用 set -e：curl 一旦返回非 0 就会直接终止脚本，
+          # 真实的 HTTP 状态码根本没机会打印出来。
+          LOG=/tmp/nutstore.log
+          : > "$LOG"
+          log()  { echo "$*" | tee -a "$LOG"; }
+          # trap + DUMPED 去重：无论从哪里退出，诊断日志都会进 Job Summary，
+          # 不会出现「失败了但 summary 一片空白」。
+          DUMPED=0
+          dump() {
+            if [ "$DUMPED" = "1" ]; then return 0; fi
+            DUMPED=1
+            { echo "### 坚果云上传诊断"; echo '```'; cat "$LOG"; echo '```'; } \
+              >> "$GITHUB_STEP_SUMMARY"
+          }
+          trap dump EXIT
+          fail() { log "❌ $*"; exit 1; }
+
+          APK_PATH="app/build/outputs/apk/release/$APK_NAME"
+
+          # 未配置 Secrets 时跳过，而不是让整个 workflow 失败
+          if [ -z "$JGY_USER" ] || [ -z "$JGY_APP_PASSWORD" ]; then
+            log "跳过坚果云上传：未配置 JGY_USER / JGY_APP_PASSWORD"
+            log "（Settings → Secrets and variables → Actions → Repository secrets）"
+            dump
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          DIR="${FOLDER:-rice-cooker-releases}"
+          # 用命令行参数传值，不要读 os.environ：DIR 是普通 shell 变量（未 export），
+          # 子进程 python3 看不到，会抛 KeyError。
+          urlenc() { python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+          APK_ENC=$(urlenc "$APK_NAME")
+          DIR_ENC=$(urlenc "$DIR")
+
+          ROOT="https://dav.jianguoyun.com/dav"
+          BASE="$ROOT/$DIR_ENC"
+          AUTH="$JGY_USER:$JGY_APP_PASSWORD"
+
+          log "目标路径：坚果云 /$DIR/$APK_NAME"
+          log "本地文件：$APK_PATH"
+          [ -f "$APK_PATH" ] || fail "本地找不到 APK，无法上传"
+          log "文件大小：$(du -h "$APK_PATH" | cut -f1)"
+          log "账号：$JGY_USER"
+          log ""
+
+          # ---- 第 1 步：认证连通性（只读，不消耗流量）----
+          log "【1/3】认证测试  PROPFIND $ROOT/"
+          # run 步骤默认 bash -e：curl 网络层失败返回非 0 会让赋值语句直接退出，
+          # 加 || true 才能拿到 -w 里的 000 与 errormsg 走下面的诊断分支。
+          R1=$(curl -s -w '\n__C__%{http_code}|__E__%{errormsg}' --max-time 60 \
+                 -u "$AUTH" -X PROPFIND -H "Depth: 0" "$ROOT/" 2>&1) || true
+          C1=$(printf '%s' "$R1" | sed -n 's/.*__C__//p' | cut -d'|' -f1)
+          E1=$(printf '%s' "$R1" | sed -n 's/.*__E__//p')
+          log "  状态码：$C1"
+          if [ -n "$E1" ]; then log "  curl 信息：$E1"; fi
+          case "$C1" in
+            207|200|201) log "  认证通过" ;;
+            401|403) fail "认证被拒（HTTP $C1）。JGY_APP_PASSWORD 必须填『应用密码』，即坚果云网页端 账户信息 → 安全选项 → 第三方应用管理 生成的那串，不是登录密码。自 2023 年起坚果云已拒绝用登录密码直连 WebDAV。" ;;
+            000) fail "连不上坚果云（HTTP 000 = 网络层失败）。curl 信息：$E1 —— GitHub runner 在美国，跨境链路抖动或被中途拦截时容易复现，换个时间重跑即可。" ;;
+            *) fail "认证测试返回异常状态码 HTTP $C1" ;;
+          esac
+          log ""
+
+          # ---- 第 2 步：确保目录存在 ----
+          log "【2/3】建目录  MKCOL /$DIR"
+          R2=$(curl -s -w '\n__C__%{http_code}|__E__%{errormsg}' --max-time 60 \
+                 -u "$AUTH" -X MKCOL "$BASE" 2>&1) || true
+          C2=$(printf '%s' "$R2" | sed -n 's/.*__C__//p' | cut -d'|' -f1)
+          E2=$(printf '%s' "$R2" | sed -n 's/.*__E__//p')
+          log "  状态码：$C2（201=新建成功  405=已存在  409=父目录不存在）"
+          if [ "$C2" != "201" ] && [ "$C2" != "405" ]; then
+            fail "建目录失败（HTTP $C2）。curl 信息：$E2 —— 可先在坚果云网页端手动建一个名为 $DIR 的文件夹，再重跑。"
+          fi
+          log ""
+
+          # ---- 第 3 步：上传 APK ----
+          log "【3/3】上传 APK（跨境传输，可能需要几分钟）"
+          R3=$(curl -s -w '\n__C__%{http_code}|__E__%{errormsg}' \
+                 --retry 2 --retry-delay 15 --retry-connrefused --max-time 900 \
+                 -u "$AUTH" -T "$APK_PATH" "$BASE/$APK_ENC" 2>&1) || true
+          C3=$(printf '%s' "$R3" | sed -n 's/.*__C__//p' | cut -d'|' -f1)
+          E3=$(printf '%s' "$R3" | sed -n 's/.*__E__//p')
+          B3=$(printf '%s' "$R3" | sed 's/__C__.*//')
+          log "  状态码：$C3（201=新建  204=覆盖）"
+          if [ -n "$B3" ]; then log "  响应体：$B3"; fi
+          if [ -n "$E3" ]; then log "  curl 信息：$E3"; fi
+          if [ "$C3" != "201" ] && [ "$C3" != "204" ]; then
+            log "上传失败（HTTP $C3）。状态码对照：401/403 认证或权限被拒；404/409 父目录不存在；507 空间不足；000 网络中断或超时。"
+            fail "APK 未上传到坚果云"
+          fi
+          log ""
+
+          # ---- 校验：确认文件真的落盘 ----
+          C4=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 \
+                 -u "$AUTH" -I "$BASE/$APK_ENC") || true
+          log "落盘校验 HEAD → HTTP $C4（200 = 文件确实在）"
+          if [ "$C4" != "200" ]; then
+            fail "HEAD 校验未通过（HTTP $C4），文件可能没有真正落盘"
+          fi
+
+          log "✅ 上传完成 → 坚果云 /$DIR/$APK_NAME"
+          dump
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+          echo "path=/$DIR/$APK_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: 输出摘要
+        if: always()
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          APK_NAME: ${{ steps.rename.outputs.apk_name }}
+          APK_SIZE: ${{ steps.rename.outputs.size }}
+          APK_SHA: ${{ steps.rename.outputs.sha256 }}
+          USING_RELEASE: ${{ steps.signing.outputs.using_release }}
+          CREATE_RELEASE: ${{ inputs.create_release }}
+          UPLOAD_NUTSTORE: ${{ inputs.upload_nutstore }}
+          MINIFY: ${{ inputs.minify }}
+          UPLOAD_OUTCOME: ${{ steps.upload_apk.outcome }}
+          NUTSTORE_SKIPPED: ${{ steps.nutstore.outputs.skipped }}
+          NUTSTORE_PATH: ${{ steps.nutstore.outputs.path }}
+        run: |
+          {
+            echo "### Release 编译完成"
+            echo ""
+            echo "- 版本：v$VERSION"
+            echo "- 产物：\`$APK_NAME\`"
+            echo "- 大小：$APK_SIZE"
+            echo "- SHA256：\`$APK_SHA\`"
+            echo "- 混淆：$MINIFY"
+            if [ "$USING_RELEASE" = "true" ]; then
+              echo "- 签名：正式密钥 ✅"
+            else
+              echo "- 签名：仓库内固定 debug 密钥（⚠️ 密钥公开，请勿对外分发）"
+            fi
+            echo ""
+            if [ "$CREATE_RELEASE" = "true" ]; then
+              echo "已打 tag 并发布到 [Releases](https://github.com/${{ github.repository }}/releases)"
+            else
+              echo "未勾选打 tag / 建 Release，不占用版本号。"
+            fi
+            echo ""
+            if [ "$UPLOAD_OUTCOME" = "failure" ]; then
+              echo "⚠️ Actions 制品上传失败（常见原因：账号级存储配额打满），Release 附件与坚果云不受影响。"
+            fi
+            echo ""
+            if [ "$UPLOAD_NUTSTORE" != "true" ]; then
+              echo "☁️ 坚果云：未上传（本次未勾选 upload_nutstore）"
+            else
+              case "$NUTSTORE_SKIPPED" in
+                true)  echo "☁️ 坚果云：已跳过（未配置 JGY_USER / JGY_APP_PASSWORD）" ;;
+                false) echo "☁️ 坚果云：已上传至 \`$NUTSTORE_PATH\`" ;;
+                *)     echo "☁️ 坚果云：未上传（步骤失败，诊断日志见上方）" ;;
+              esac
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
