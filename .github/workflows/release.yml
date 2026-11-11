@@ -189,7 +189,9 @@ jobs:
       # 没必要占用版本号、也不用在 Releases 页留记录。
       # ---------------------------------------------------------------
       - name: 创建 tag 并发布 Release
-        if: inputs.create_release
+        # 显式比较：网页触发时 boolean input 是布尔值，但通过 API dispatch
+        # 传入的是字符串；若只写 if: inputs.create_release，"false" 会被当真值。
+        if: inputs.create_release == true || inputs.create_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: v${{ steps.ver.outputs.version }}
@@ -250,7 +252,7 @@ jobs:
       # ---------------------------------------------------------------
       - name: 上传到坚果云
         id: nutstore
-        if: inputs.upload_nutstore
+        if: inputs.upload_nutstore == true || inputs.upload_nutstore == 'true'
         env:
           JGY_USER: ${{ secrets.JGY_USER }}
           JGY_APP_PASSWORD: ${{ secrets.JGY_APP_PASSWORD }}
