@@ -136,11 +136,19 @@ design-reference/                            # 设计归档完整镜像：docs /
 |---|---|---|
 | `version_name` | 留空 | 留空读 `app/build.gradle.kts` 的 `defaultVersionName`；填了会同时传给 Gradle，APK 内版本号与文件名一致。发版后请同步改文件 |
 | `upload_nutstore` | **true** | 上传到坚果云。反复调试时手动关掉，不必删 Secret |
-| `nutstore_folder` | `rice-cooker-releases` | 坚果云目标文件夹，纯英文/数字 |
+| `nutstore_folder` | `rice-cooker-releases` | 统一父目录 `/my-apps/` 下的应用子目录名，纯英文/数字 |
 | `create_release` | **false** | 是否额外打 tag 并建 GitHub Release。**与坚果云上传完全解耦**——只想要国内可下载的安装包时，不必占用版本号 |
 | `minify` | false | 是否开 R8 混淆与资源压缩 |
 
-产物固定命名 `rice-cooker-v<版本>.apk`（纯 ASCII），同时上传到 Actions Artifacts 与坚果云 `/rice-cooker-releases/`。
+产物固定命名 `rice-cooker-v<版本>.apk`（纯 ASCII），同时上传到 Actions Artifacts 与坚果云 `/my-apps/rice-cooker-releases/`。
+
+### 目录约定（所有应用统一）
+
+所有应用的发布包统一放在坚果云 `/my-apps/` 下：本项目是 `/my-apps/rice-cooker-releases/`，`lifelog` 是 `/my-apps/lifelog-releases/`。父目录 `my-apps` 是**全局常量**，写死在工作流里；只有应用子目录保留 `nutstore_folder` 可临时覆盖。这样坚果云根目录只留一个入口，不再随项目数增长。
+
+工作流会做**两级 MKCOL**（先 `/my-apps` 再应用子目录，201/405 都算成功）——WebDAV 的 MKCOL 不创建多级目录，少建一级会返回 409。
+
+**旧目录不迁移**：此前发版落在根目录 `/rice-cooker-releases/` 的 APK 保留为历史存档，新发版一律进新路径。坚果云免费版「空间 = 累计上传流量，删了也不释放」，且 WebDAV `MOVE` 未经实测，搬动不省空间、只增风险。
 
 ### 需要配置的 Secret
 
@@ -166,13 +174,14 @@ design-reference/                            # 设计归档完整镜像：docs /
 
 ### 上传实现要点
 
-三段式 WebDAV：`PROPFIND` 认证测试（只读、不耗流量）→ `MKCOL` 确保目录存在（201 新建 / 405 已存在）→ `PUT` 上传（201 新建 / 204 覆盖），最后 `HEAD` 校验文件确实落盘。状态码与排查建议直接写进 Job Summary，`trap dump EXIT` 保证失败时诊断日志不丢。
+四段式 WebDAV：`PROPFIND` 认证测试（只读、不耗流量）→ 两级 `MKCOL`（先 `/my-apps` 再应用子目录，201 新建 / 405 已存在）→ `PUT` 上传（201 新建 / 204 覆盖），最后 `HEAD` 校验文件确实落盘。状态码与排查建议直接写进 Job Summary，`trap dump EXIT` 保证失败时诊断日志不丢。
 
 几个刻意的设计，均来自 `my-app-workflow/recipes/上传APK到坚果云.md` 与 `lifelog/.github/workflows/release.yml` 的实测经验：
 
 | 决策 | 理由 |
 |---|---|
 | 不用 `curl --fail`、脚本不 `set -e` | `--fail` 会在 HTTP 错误时直接退出，状态码和响应体都拿不到，日志只剩一句无信息量的报错 |
+| 两级 `MKCOL` 共用 `mkcol()` | 所有应用统一放在 `/my-apps/` 下，根目录只留一个入口；WebDAV 不创建多级目录，父目录缺失时子目录直接 409 |
 | 上传带 `--retry 2 --retry-delay 15 --max-time 900` | GitHub runner 在美国，跨境链路抖动常见；`HTTP 000` 是网络层失败，不是配置错 |
 | 文件名纯 ASCII | GitHub Release 资产接口会**静默丢弃**中文且不报错，而 Actions artifact 名支持 Unicode，两边显示会不一致 |
 | 签名校验用 `apksigner`，不用 `keytool -jarfile` | `keytool -printcert -jarfile` 只能读 JAR v1 签名，AGP 8.x + minSdk 26 默认只签 v2/v3，会报「not a signed jar file」并在 `bash -e` 下直接中断。首次实跑就踩到了，已改用 Android SDK 自带的 `apksigner verify --print-certs`，并把证书输出写进 Job Summary |
